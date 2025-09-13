@@ -1,0 +1,63 @@
+{
+    "dashboard": {
+      "id": null,
+      "title": "3D Tracker Pipeline",
+      "tags": ["3d-tracker"],
+      "timezone": "browser",
+      "panels": [
+        {
+          "id": 1,
+          "title": "Active Jobs",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "active_jobs_total",
+              "refId": "A"
+            }
+          ],
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0}
+        },
+        {
+          "id": 2,
+          "title": "Queue Size",
+          "type": "stat", 
+          "targets": [
+            {
+              "expr": "queue_size_total",
+              "refId": "A"
+            }
+          ],
+          "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0}
+        },
+        {
+          "id": 3,
+          "title": "GPU Utilization",
+          "type": "graph",
+          "targets": [
+            {
+              "expr": "nvidia_gpu_utilization",
+              "refId": "A"
+            }
+          ],
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+        },
+        {
+          "id": 4,
+          "title": "Processing Time",
+          "type": "graph",
+          "targets": [
+            {
+              "expr": "api_request_duration_seconds",
+              "refId": "A"
+            }
+          ],
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+        }
+      ],
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "refresh": "10s"
+    }
+  }

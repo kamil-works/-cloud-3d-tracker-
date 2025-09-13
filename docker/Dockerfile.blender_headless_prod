@@ -1,0 +1,55 @@
+FROM ubuntu:22.04
+
+LABEL maintainer="3D Tracker Team"
+LABEL description="Production Blender worker with COLMAP import"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates python3 python3-pip xvfb libglu1-mesa \
+    xz-utils curl redis-tools && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+RUN pip3 install --no-cache-dir \
+    redis \
+    requests \
+    sentry-sdk \
+    prometheus-client
+
+# Install latest Blender
+WORKDIR /opt
+RUN BLENDER_VERSION="4.0.2" && \
+    wget -q https://download.blender.org/release/Blender4.0/blender-${BLENDER_VERSION}-linux-x64.tar.xz && \
+    tar -xf blender-${BLENDER_VERSION}-linux-x64.tar.xz && \
+    mv blender-${BLENDER_VERSION}-linux-x64 /opt/blender && \
+    rm blender-${BLENDER_VERSION}-linux-x64.tar.xz
+
+ENV PATH="/opt/blender:${PATH}"
+
+# Download and install COLMAP addon
+RUN wget -q https://github.com/SBCV/Blender-Addon-Photogrammetry-Importer/releases/download/v3.0.0/photogrammetry_importer.zip \
+    -O /app/photogrammetry_importer.zip
+
+# Create user and setup
+RUN useradd -m -s /bin/bash blender && \
+    echo "blender ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+USER blender
+WORKDIR /app
+
+# Copy worker scripts
+COPY backend/blender_worker/ /app/
+RUN chmod +x /app/enhanced_blender.py
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD redis-cli -u $REDIS_URL ping || exit 1
+
+# Use virtual display for headless operation
+ENV DISPLAY=:99
+RUN echo '#!/bin/bash\nXvfb :99 -screen 0 1024x768x24 &\nexec python3 /app/enhanced_blender.py' > /app/start.sh && \
+    chmod +x /app/start.sh
+
+ENTRYPOINT ["/app/start.sh"]

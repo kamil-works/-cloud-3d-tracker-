@@ -1,0 +1,66 @@
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+
+LABEL maintainer="3D Tracker Team"
+LABEL description="Production COLMAP worker with CUDA acceleration"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_VISIBLE_DEVICES=0
+ENV NVIDIA_VISIBLE_DEVICES=all
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git build-essential cmake wget unzip ca-certificates \
+    libgoogle-glog-dev libgflags-dev libatlas-base-dev \
+    libeigen3-dev libsuitesparse-dev libjpeg-dev libpng-dev \
+    libtiff-dev libxft-dev libxmu-dev libxi-dev libopencv-dev \
+    libboost-all-dev libglew-dev libopenblas-dev liblapack-dev \
+    python3 python3-pip python3-venv ffmpeg sudo curl redis-tools \
+    htop nvtop && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -s /bin/bash colmapuser && \
+    echo "colmapuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Install Python packages
+RUN pip3 install --no-cache-dir \
+    pycolmap \
+    requests \
+    boto3 \
+    redis \
+    sentry-sdk \
+    websockets \
+    prometheus-client
+
+# Build COLMAP from source with optimizations
+USER colmapuser
+WORKDIR /home/colmapuser
+
+RUN git clone --depth 1 --branch main https://github.com/colmap/colmap.git
+WORKDIR /home/colmapuser/colmap
+RUN mkdir build && cd build && \
+    cmake \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCUDA_ENABLED=ON \
+        -DCUDA_NVCC_FLAGS="-Xcompiler -fPIC" \
+        -DCMAKE_CUDA_ARCHITECTURES="75;80;86" \
+        .. && \
+    make -j$(nproc) && \
+    sudo make install
+
+# Setup working directory
+USER root
+WORKDIR /app
+COPY backend/worker/ /app/
+RUN chmod +x /app/enhanced_reconstruct.sh
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD redis-cli -u $REDIS_URL ping || exit 1
+
+# Resource limits and monitoring
+RUN echo "* soft nofile 65536" >> /etc/security/limits.conf && \
+    echo "* hard nofile 65536" >> /etc/security/limits.conf
+
+USER colmapuser
+ENTRYPOINT ["/app/enhanced_reconstruct.sh"]

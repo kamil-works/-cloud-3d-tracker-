@@ -1,0 +1,203 @@
+version: "3.8"
+
+services:
+  # API Gateway with monitoring
+  api:
+    build:
+      context: ./backend/api
+      dockerfile: Dockerfile.prod
+    container_name: tracker_api_prod
+    restart: unless-stopped
+    volumes:
+      - ./backend/api:/app
+      - ./logs:/app/logs
+    environment:
+      - NODE_ENV=production
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
+      - STORAGE_ENDPOINT=minio:9000
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=${MINIO_PASSWORD}
+      - SENTRY_DSN=${SENTRY_DSN}
+      - WEBSOCKET_URL=ws://websocket:8765
+      - MAX_UPLOAD_SIZE=2147483648  # 2GB
+      - MAX_QUEUE_SIZE=10
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - minio
+      - websocket
+      - prometheus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # WebSocket server for real-time progress
+  websocket:
+    build: ./backend/websocket
+    container_name: tracker_websocket
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+
+  # Enhanced COLMAP worker with auto-scaling
+  worker_colmap:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.colmap_cuda_prod
+    container_name: colmap_worker
+    restart: unless-stopped
+    volumes:
+      - ./input_videos:/app/input_videos:rw
+      - ./output_scenes:/app/output_scenes:rw
+      - ./tmp:/app/temp_images:rw
+      - ./logs:/app/logs:rw
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - REDIS_URL=redis://redis:6379/0
+      - MAX_WORKERS=2
+      - SENTRY_DSN=${SENTRY_DSN}
+      - WEBSOCKET_URL=ws://websocket:8765
+      - AUTO_SCALE_THRESHOLD=0.8
+    depends_on:
+      - redis
+      - websocket
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Blender worker with error recovery
+  blender_worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.blender_headless_prod
+    container_name: blender_worker
+    restart: unless-stopped
+    volumes:
+      - ./output_scenes:/app/scenes:rw
+      - ./output_blend:/app/output_blend:rw
+      - ./logs:/app/logs:rw
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - WEBSOCKET_URL=ws://websocket:8765
+      - MAX_RETRIES=3
+    depends_on:
+      - worker_colmap
+      - websocket
+
+  # Redis with persistence and monitoring
+  redis:
+    image: redis:7-alpine
+    container_name: redis_prod
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    ports:
+      - "6379:6379"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # MinIO with backup
+  minio:
+    image: minio/minio:RELEASE.2025-01-01T00-00-00Z
+    container_name: minio_prod
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  # Prometheus monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+
+  # Grafana dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/dashboards:/var/lib/grafana/dashboards
+      - ./monitoring/grafana.ini:/etc/grafana/grafana.ini
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+
+  # Log aggregation
+  fluentd:
+    build: ./monitoring/fluentd
+    container_name: fluentd
+    restart: unless-stopped
+    volumes:
+      - ./logs:/fluentd/log
+    ports:
+      - "24224:24224"
+
+  # Nginx reverse proxy with SSL
+  nginx:
+    build: ./nginx
+    container_name: nginx_prod
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - api
+      - grafana
+
+volumes:
+  redis_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  default:
+    driver: bridge

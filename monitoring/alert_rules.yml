@@ -1,0 +1,38 @@
+groups:
+  - name: 3d_tracker_alerts
+    rules:
+      - alert: HighGPUMemoryUsage
+        expr: nvidia_gpu_memory_used_bytes / nvidia_gpu_memory_total_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High GPU memory usage detected"
+          description: "GPU memory usage is above 90% for more than 5 minutes"
+
+      - alert: JobQueueBacklog
+        expr: redis_list_length{list="colmap_jobs"} > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job queue backlog detected"
+          description: "More than 10 jobs waiting in queue for 10+ minutes"
+
+      - alert: WorkerDown
+        expr: up{job="api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API worker is down"
+          description: "API service has been down for more than 2 minutes"
+
+      - alert: HighDiskUsage
+        expr: (node_filesystem_size_bytes - node_filesystem_free_bytes) / node_filesystem_size_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage detected"
+          description: "Disk usage is above 85%"
